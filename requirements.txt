@@ -1,0 +1,11 @@
+kagglehub
+pandas
+numpy
+requests
+torch
+torchvision
+PILLOW
+matplotlib
+seaborn
+scikit-learn
+tqdm
