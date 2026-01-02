@@ -6,6 +6,7 @@ from torch.nn import Transformer
 import math
 import numpy as np
 import pandas as pd
+import torch.nn.functional as F
 
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -40,7 +41,8 @@ class Unet(nn.Module):
             nn.ConvTranspose2d(
                 feature*2,
                 feature,
-                kernel_size=2
+                kernel_size=2,
+                stride=2
                 )
             )
             self.ups.append(DoubleConv(feature*2, feature))
@@ -51,6 +53,8 @@ class Unet(nn.Module):
         self.end_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
     
     def forward(self, x):
+        # remember original spatial size so we can restore it for odd inputs
+        orig_h, orig_w = x.shape[2], x.shape[3]
         skip_connections = []
 
     #ups
@@ -66,13 +70,29 @@ class Unet(nn.Module):
     #down
         for idx in range(0, len(self.ups), 2):
             x = self.ups[idx](x)
-            skip_connections = skip_connections[idx//2]
-            concat_skip = torch.cat((skip_connections, x), dim=1)
+            skip_connection = skip_connections[idx//2]
+            # If spatial sizes don't match due to odd/even rounding, crop or interpolate
+            sh, sw = skip_connection.shape[2], skip_connection.shape[3]
+            xh, xw = x.shape[2], x.shape[3]
+            if sh != xh or sw != xw:
+                # If skip is larger, center-crop it. If smaller, interpolate to match.
+                if sh >= xh and sw >= xw:
+                    start_h = (sh - xh) // 2
+                    start_w = (sw - xw) // 2
+                    skip_connection = skip_connection[:, :, start_h:start_h + xh, start_w:start_w + xw]
+                else:
+                    skip_connection = F.interpolate(skip_connection, size=(xh, xw), mode='bilinear', align_corners=False)
+
+            concat_skip = t.cat((skip_connection, x), dim=1)
             x = self.ups[idx+1](concat_skip)
         
         x = self.end_conv(x)
+        # restore original spatial size if it changed due to pooling/upsampling
+        if x.shape[2] != orig_h or x.shape[3] != orig_w:
+            x = F.interpolate(x, size=(orig_h, orig_w), mode='bilinear', align_corners=False)
         return x 
     
+
 
 def test(x_pxls, y_pxls):
     x = t.randn(3, 1, x_pxls, y_pxls)
@@ -87,5 +107,5 @@ def test(x_pxls, y_pxls):
     
 if __name__ == '__main__':
     test(160, 160)
-    test(161,161)
     test(160,320)
+    test(161,161)
