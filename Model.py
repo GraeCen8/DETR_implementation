@@ -109,3 +109,7 @@ if __name__ == '__main__':
     test(160, 160)
     test(160,320)
     test(161,161)
+    test(161,320)
+    test(321,321)
+    test(322,321)
+    #passed all tests
