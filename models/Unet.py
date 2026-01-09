@@ -8,69 +8,95 @@ import numpy as np
 import pandas as pd
 import torch.nn.functional as F
 
-import torch
-import torch.nn as nn
-
 class DoubleConv(nn.Module):
-    def __init__(self, in_c, out_c):
-        super().__init__()
+    def __init__(self, in_channels, out_channels):
+        super(DoubleConv, self).__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(in_c, out_c, 3, padding=1),
-            nn.BatchNorm2d(out_c),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_c, out_c, 3, padding=1),
-            nn.BatchNorm2d(out_c),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels, out_channels, 3, 1, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
         )
-
+    
     def forward(self, x):
         return self.conv(x)
+    
 
-class UNet(nn.Module):
-    def __init__(self):
-        super().__init__()
 
-        self.d1 = DoubleConv(3, 64)
-        self.d2 = DoubleConv(64, 128)
-        self.d3 = DoubleConv(128, 256)
-        self.d4 = DoubleConv(256, 512)
+class Unet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=1, features=[64,128,256,512]):
+        super(Unet, self).__init__()
 
-        self.pool = nn.MaxPool2d(2)
+        self.ups = nn.ModuleList()
+        self.downs = nn.ModuleList()
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+        #Downward section
+        for feature in features:
+            self.downs.append(DoubleConv(in_channels, feature))
+            in_channels = feature
 
-        self.bottleneck = DoubleConv(512, 1024)
+        #upward section
+        for feature in reversed(features):
+            self.ups.append(
+            nn.ConvTranspose2d(
+                feature*2,
+                feature,
+                kernel_size=2,
+                stride=2
+                )
+            )
+            self.ups.append(DoubleConv(feature*2, feature))
+        
+        #bottleneck
+        self.bottleneck = DoubleConv(features[-1], features[-1]*2)
 
-        self.u4 = nn.ConvTranspose2d(1024, 512, 2, stride=2)
-        self.u3 = nn.ConvTranspose2d(512, 256, 2, stride=2)
-        self.u2 = nn.ConvTranspose2d(256, 128, 2, stride=2)
-        self.u1 = nn.ConvTranspose2d(128, 64, 2, stride=2)
-
-        self.c4 = DoubleConv(1024, 512)
-        self.c3 = DoubleConv(512, 256)
-        self.c2 = DoubleConv(256, 128)
-        self.c1 = DoubleConv(128, 64)
-
-        self.out = nn.Conv2d(64, 1, 1)
-
+        self.end_conv = nn.Conv2d(features[0], out_channels, kernel_size=1)
+    
     def forward(self, x):
-        d1 = self.d1(x)
-        d2 = self.d2(self.pool(d1))
-        d3 = self.d3(self.pool(d2))
-        d4 = self.d4(self.pool(d3))
+        # remember original spatial size so we can restore it for odd inputs
+        orig_h, orig_w = x.shape[2], x.shape[3]
+        skip_connections = []
 
-        b = self.bottleneck(self.pool(d4))
+    #ups
+        for down in self.downs:
+            x = down(x)
+            skip_connections.append(x)
+            x = self.pool(x)
+        
+        x = self.bottleneck(x)
 
-        x = self.c4(torch.cat([self.u4(b), d4], dim=1))
-        x = self.c3(torch.cat([self.u3(x), d3], dim=1))
-        x = self.c2(torch.cat([self.u2(x), d2], dim=1))
-        x = self.c1(torch.cat([self.u1(x), d1], dim=1))
+        skip_connections = skip_connections[::-1]
 
-        #return torch.sigmoid(self.out(x))
-        return self.out(x)
+    #down
+        for idx in range(0, len(self.ups), 2):
+            x = self.ups[idx](x)
+            skip_connection = skip_connections[idx//2]
+            # If spatial sizes don't match due to odd/even rounding, crop or interpolate
+            sh, sw = skip_connection.shape[2], skip_connection.shape[3]
+            xh, xw = x.shape[2], x.shape[3]
+            if sh != xh or sw != xw:
+                # If skip is larger, center-crop it. If smaller, interpolate to match.
+                if sh >= xh and sw >= xw:
+                    start_h = (sh - xh) // 2
+                    start_w = (sw - xw) // 2
+                    skip_connection = skip_connection[:, :, start_h:start_h + xh, start_w:start_w + xw]
+                else:
+                    skip_connection = F.interpolate(skip_connection, size=(xh, xw), mode='bilinear', align_corners=False)
+
+            concat_skip = t.cat((skip_connection, x), dim=1)
+            x = self.ups[idx+1](concat_skip)
+        
+        x = self.end_conv(x)
+        # restore original spatial size if it changed due to pooling/upsampling
+        if x.shape[2] != orig_h or x.shape[3] != orig_w:
+            x = F.interpolate(x, size=(orig_h, orig_w), mode='bilinear', align_corners=False)
+        return x 
+    
 
 
 def test(x_pxls, y_pxls):
-    x = t.randn(3, 3, x_pxls, y_pxls)
-    model = UNet()
+    x = t.randn(3, 1, x_pxls, y_pxls)
+    model = Unet(in_channels=1, out_channels=1)
     preds = model(x)
 
     if x.shape == preds.shape:
@@ -82,8 +108,8 @@ def test(x_pxls, y_pxls):
 if __name__ == '__main__':
     test(160, 160)
     test(160,320)
-    test(128,128)
-    test(256,256)
-    test(512,512)
-    test(1024,1024)
- #failed by sizes being different after conv layers
+    test(161,161)
+    test(161,320)
+    test(321,321)
+    test(322,321)
+    #passed all tests

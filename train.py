@@ -1,46 +1,57 @@
 import torch
 from torch.utils.data import DataLoader
-from datasets.coco_instance import CocoInstanceDataset
-from models.Unet import UNet
+from datasets.voc_segmentation import VOCSegmentation
+from models.Unet import Unet
 from tqdm import tqdm
-import accelerate as acc
+import os
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = torch.device("cuda")
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
-if __name__ == '__main__':
-    dataset = CocoInstanceDataset(
-        img_dir="data/coco2017/val2017",
-        ann_file="data/coco2017/annotations/instances_val2017.json"
+if __name__ == "__main__":
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    dataset_dir = os.path.join(project_dir, "data", "VOC2012")
+
+    dataset = VOCSegmentation(
+        root=dataset_dir,
+        split="train",
+        img_size=256
     )
-    
-    #regular setup
-    loader = DataLoader(dataset, batch_size=8, shuffle=True, num_workers=4)
-    model = UNet().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=8,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    model = Unet(out_channels=21).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     criterion = torch.nn.CrossEntropyLoss(ignore_index=255)
-    #accerlerator setup
-    accelerator = acc.Accelerator()
-    model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
-    #cuda
-    
+
     for epoch in range(20):
         model.train()
-        epoch_loss = 0
+        epoch_loss = 0.0
 
-        for imgs, masks in tqdm(loader):
+        for imgs, masks in tqdm(loader, desc=f"Epoch {epoch}"):
+            imgs = imgs.to(device, non_blocking=True)
+            masks = masks.to(device, non_blocking=True).long()
 
-            preds = model(imgs)
-            loss = criterion(preds, masks)
+            optimizer.zero_grad(set_to_none=True)
 
-            optimizer.zero_grad()
-            accelerator.backward(loss)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                preds = model(imgs)
+                loss = criterion(preds, masks)
+
+            loss.backward()
             optimizer.step()
 
-           # epoch_loss += loss.item()
+            epoch_loss += loss.item()
 
-        print(f"Epoch {epoch}: loss={100 / len(loader):.4f}")
+        print(f"Epoch {epoch}: loss={epoch_loss / len(loader):.4f}")
 
-    torch.save(model.state_dict(), "weights/unet_coco_v1.pth")
-
-    
+    os.makedirs("weights", exist_ok=True)
+    torch.save(model.state_dict(), "weights/unet_voc_bf16.pth")

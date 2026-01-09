@@ -39,14 +39,13 @@ class VOCSegmentation(Dataset):
         mask_path = os.path.join(self.root, "SegmentationClass", f"{img_id}.png")
 
         image = Image.open(img_path).convert("RGB")
-        mask = Image.open(mask_path).convert("L")
+        mask = Image.open(mask_path)  # DO NOT convert to L
 
         image = self.image_transform(image)
         mask = self.mask_transform(mask)
 
-        # Convert mask to tensor WITHOUT scaling
-        mask = torch.as_tensor(
-            torch.ByteTensor(torch.ByteStorage.from_buffer(mask.tobytes()))
-        ).view(self.img_size, self.img_size).long()
+        mask = F.pil_to_tensor(mask).long().squeeze(0)
+
+
 
         return image, mask
