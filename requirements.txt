@@ -9,3 +9,7 @@ matplotlib
 seaborn
 scikit-learn
 tqdm
+accelerate
+pycocotools
+opencv-python
+deepspeed
