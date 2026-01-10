@@ -35,8 +35,8 @@ if __name__ == "__main__":
     for epoch in range(20):
         model.train()
         epoch_loss = 0.0
-
-        for imgs, masks in tqdm(loader, desc=f"Epoch {epoch}"):
+        loop = tqdm(loader, desc=f'epoch: {epoch}')
+        for imgs, masks in loop:
             imgs = imgs.to(device, non_blocking=True)
             masks = masks.to(device, non_blocking=True).long()
 
@@ -50,8 +50,10 @@ if __name__ == "__main__":
             optimizer.step()
 
             epoch_loss += loss.item()
-
-        print(f"Epoch {epoch}: loss={epoch_loss / len(loader):.4f}")
+            loop.set_postfix(loss=loss.item())
+            
+        loop.set_postfix(loss=epoch_loss / len(loader))
+       # print(f"Epoch {epoch}: loss={epoch_loss / len(loader):.4f}")
 
     os.makedirs("weights", exist_ok=True)
     torch.save(model.state_dict(), "weights/unet_voc_bf16.pth")
